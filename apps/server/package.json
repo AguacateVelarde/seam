@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "seed": "bun src/seed.ts",
+    "e2e": "bun scripts/e2e.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },

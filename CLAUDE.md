@@ -16,6 +16,7 @@ All from the repo root unless noted. Bun only — never npm/yarn/pnpm.
 | Lint/format (Biome, autofix) | `bunx biome check --write .` |
 | One package | `cd apps/server && bunx tsc --noEmit` / `bun test src` |
 | DB migration from schema change | `cd apps/server && bunx drizzle-kit generate` (then review the SQL; hand-add data migrations) |
+| API integration test (needs scratch DB) | `DATABASE_URL=postgres://seam:seam@localhost:5434/seam bun run --cwd apps/server e2e` |
 | Apply migrations | `bun run db:migrate` (or automatic in Docker via `SEAM_AUTO_MIGRATE=true`) |
 | Docker stack (server :3000, studio :8080) | `docker compose up -d --build` |
 

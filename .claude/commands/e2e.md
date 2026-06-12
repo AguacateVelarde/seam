@@ -2,16 +2,19 @@
 description: Spin up a scratch DB and smoke-test the server API end-to-end
 ---
 
-Stand up a disposable environment and verify the server's core flows over HTTP
-(unit tests don't cover routes). Use the scratch-DB recipe from CLAUDE.md
-(postgres on :5434, server on :3199). Then, with curl:
+Stand up a disposable Postgres and run the scripted API integration suite
+(unit tests don't cover routes; this does — auth, channels, promote,
+experiments, adapters, invites, rollback):
 
-1. `POST /v1/auth/setup` → token; create a project + screen + snapshot.
-2. Publish to `development`, verify Delivery returns it only with
-   `X-Seam-Channel: development` and 404s on production.
-3. Promote to production via `/publications/promote`, verify production serves.
-4. Create a read API key, confirm it can deliver but gets 403 on management.
-5. $ARGUMENTS (additional flows to test, if specified)
+```sh
+docker run --rm -d --name seam-test-pg -p 5434:5432 \
+  -e POSTGRES_USER=seam -e POSTGRES_PASSWORD=seam -e POSTGRES_DB=seam postgres:16-alpine
+sleep 3
+DATABASE_URL=postgres://seam:seam@localhost:5434/seam bun run --cwd apps/server e2e
+docker rm -f seam-test-pg
+```
 
-Always clean up: kill the scratch server, `docker rm -f seam-test-pg`.
-Report each step's status; on failure show the response body.
+If $ARGUMENTS names additional flows to verify, test those with curl against
+the same scratch server before cleanup (see apps/server/scripts/e2e.ts for the
+request helper patterns). On failure, show the failing assertion and response
+body, fix the root cause, and re-run.
