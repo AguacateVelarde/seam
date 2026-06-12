@@ -1,0 +1,122 @@
+import {
+  CreateExperimentSchema,
+  type ExperimentStatus,
+  UpdateExperimentSchema,
+  experimentStatusTransitions,
+} from "@seam/schema";
+import { and, eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { ulid } from "ulid";
+import { db } from "../db/client";
+import { experiments, publications, screens } from "../db/schema";
+import { SeamError } from "../lib/errors";
+import { param } from "../lib/params";
+import { serializeRow, serializeRows } from "../lib/serialize";
+import { parseBody } from "../lib/validate";
+import { type AuthEnv, requireProjectAccess } from "../middleware/auth";
+import { stickyStore } from "../services/sticky-store";
+
+export const experimentsRouter = new Hono<AuthEnv>();
+
+experimentsRouter.use("*", requireProjectAccess("member"));
+
+async function findExperiment(projectId: string, experimentId: string) {
+  const experiment = await db.query.experiments.findFirst({
+    where: and(eq(experiments.id, experimentId), eq(experiments.projectId, projectId)),
+  });
+  if (!experiment) throw new SeamError("EXPERIMENT_NOT_FOUND", 404, "Experiment not found");
+  return experiment;
+}
+
+experimentsRouter.post("/", async (c) => {
+  const projectId = param(c, "projectId");
+  const body = parseBody(CreateExperimentSchema, await c.req.json());
+  const [created] = await db
+    .insert(experiments)
+    .values({
+      id: ulid(),
+      projectId,
+      name: body.name,
+      strategy: body.strategy,
+      variants: body.variants,
+      status: "draft",
+    })
+    .returning();
+  return c.json(serializeRow(created), 201);
+});
+
+experimentsRouter.get("/", async (c) => {
+  const projectId = param(c, "projectId");
+  const all = await db.query.experiments.findMany({
+    where: eq(experiments.projectId, projectId),
+    orderBy: (t, { desc }) => [desc(t.createdAt)],
+  });
+  return c.json(serializeRows(all));
+});
+
+experimentsRouter.get("/:experimentId", async (c) => {
+  const projectId = param(c, "projectId");
+  const experiment = await findExperiment(projectId, param(c, "experimentId"));
+
+  // Enrich with affected screens (screens whose active publication references
+  // this experiment) and sticky assignment counts per variant.
+  const affectedScreens = await db
+    .select({ id: screens.id, name: screens.name, path: screens.path })
+    .from(screens)
+    .innerJoin(publications, eq(publications.id, screens.activePublicationId))
+    .where(and(eq(screens.projectId, projectId), eq(publications.experimentId, experiment.id)));
+
+  const assignmentCount = await stickyStore.count(`seam:ab:${experiment.id}:`);
+
+  return c.json({ ...serializeRow(experiment), affectedScreens, assignmentCount });
+});
+
+experimentsRouter.patch("/:experimentId", async (c) => {
+  const projectId = param(c, "projectId");
+  const experimentId = param(c, "experimentId");
+  const experiment = await findExperiment(projectId, experimentId);
+  const body = parseBody(UpdateExperimentSchema, await c.req.json());
+
+  // Status transitions: draft → active, active ⇄ paused, active|paused → concluded
+  if (body.status && body.status !== experiment.status) {
+    const allowed = experimentStatusTransitions[experiment.status as ExperimentStatus];
+    if (!allowed.includes(body.status)) {
+      throw new SeamError(
+        "EXPERIMENT_CONFLICT",
+        409,
+        `Cannot transition experiment from "${experiment.status}" to "${body.status}"`,
+      );
+    }
+  }
+
+  // name, strategy, variants are only mutable while the experiment is a draft.
+  if (experiment.status !== "draft") {
+    if (body.variants) {
+      throw new SeamError(
+        "EXPERIMENT_CONFLICT",
+        409,
+        "Variants can only be modified while the experiment is in draft status",
+      );
+    }
+    if (body.strategy || body.name) {
+      throw new SeamError(
+        "EXPERIMENT_CONFLICT",
+        409,
+        "Name and strategy can only be modified while the experiment is in draft status",
+      );
+    }
+  }
+
+  const [updated] = await db
+    .update(experiments)
+    .set({
+      ...(body.name ? { name: body.name } : {}),
+      ...(body.strategy ? { strategy: body.strategy } : {}),
+      ...(body.variants ? { variants: body.variants } : {}),
+      ...(body.status ? { status: body.status } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(experiments.id, experimentId))
+    .returning();
+  return c.json(serializeRow(updated));
+});
