@@ -12,7 +12,10 @@ COPY packages/sdk-js/package.json ./packages/sdk-js/
 RUN bun install --frozen-lockfile
 
 FROM base AS build
-COPY --from=install /app/node_modules ./node_modules
+# Copy the whole install-stage tree: bun nests some deps inside per-package
+# node_modules (apps/*/node_modules, packages/*/node_modules), so copying
+# only the root node_modules breaks resolution on a clean CI checkout.
+COPY --from=install /app /app
 COPY . .
 RUN cd apps/server && bun run build
 

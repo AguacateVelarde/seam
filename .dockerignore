@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.turbo
+**/.turbo
+.env
+**/.env
+**/.env.local
+.claude
+CLAUDE.local.md
+*.log
+.DS_Store
