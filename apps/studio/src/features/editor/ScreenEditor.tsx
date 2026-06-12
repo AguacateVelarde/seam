@@ -1,6 +1,6 @@
 import type { DragEndEvent, DragMoveEvent, DragStartEvent } from "@dnd-kit/core";
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { ChevronDown, Eye, History, Save, Upload } from "lucide-react";
+import { ChevronDown, Eye, History, Layers, Save, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
@@ -20,9 +20,11 @@ import {
   useSnapshots,
   useUpdateScreen,
 } from "../../lib/hooks";
-import type { Component, Snapshot } from "../../lib/types";
+import type { Channel, Component, Snapshot } from "../../lib/types";
+import { CHANNELS } from "../../lib/types";
 import { findNodeById, findNodeLocation, useEditorStore } from "../../store/editor";
 import { toast } from "../../store/toast";
+import { ChannelsDialog } from "../screens/ChannelsDialog";
 import { CanvasView } from "./CanvasView";
 import { CatalogPanel } from "./CatalogPanel";
 import { PropsPanel } from "./PropsPanel";
@@ -100,7 +102,9 @@ export function ScreenEditor() {
   const [currentSnapshotId, setCurrentSnapshotId] = useState<string | null>(null);
   const [viewingSnapshot, setViewingSnapshot] = useState<Snapshot | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishChannel, setPublishChannel] = useState<Channel>("production");
   const [publishExperimentId, setPublishExperimentId] = useState("");
+  const [channelsOpen, setChannelsOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const loadedScreenRef = useRef<string | null>(null);
 
@@ -285,6 +289,7 @@ export function ScreenEditor() {
   }
 
   function openPublishDialog() {
+    setPublishChannel("production");
     setPublishExperimentId("");
     setPublishOpen(true);
   }
@@ -301,10 +306,11 @@ export function ScreenEditor() {
       }
       await createPublication.mutateAsync({
         snapshotId,
+        channel: publishChannel,
         ...(publishExperimentId ? { experimentId: publishExperimentId } : {}),
       });
       setPublishOpen(false);
-      toast.success(`Published v${version}`);
+      toast.success(`Published v${version} to ${publishChannel}`);
     } catch {
       // handled globally (incl. EXPERIMENT_CONFLICT problems)
     }
@@ -417,6 +423,15 @@ export function ScreenEditor() {
           <Upload size={13} />
           Publish
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setChannelsOpen(true)}
+          title="Manage release channels"
+        >
+          <Layers size={13} />
+          Channels
+        </Button>
         <Link to={`/${projectId}/screens/${screenId}/preview`}>
           <Button variant="ghost" size="sm">
             <Eye size={13} />
@@ -487,6 +502,18 @@ export function ScreenEditor() {
               ? "Your draft will be saved as a new snapshot and published."
               : `Snapshot v${publishVersion} will become the active publication.`}
           </p>
+          <Field label="Channel" hint="The release channel this publication targets.">
+            <Select
+              value={publishChannel}
+              onChange={(e) => setPublishChannel(e.target.value as Channel)}
+            >
+              {CHANNELS.map((channel) => (
+                <option key={channel} value={channel}>
+                  {channel}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Field
             label="Experiment"
             hint={
@@ -514,11 +541,19 @@ export function ScreenEditor() {
             </Button>
             <Button onClick={handlePublish} disabled={busy}>
               <Upload size={13} />
-              {busy ? "Publishing…" : "Publish"}
+              {busy ? "Publishing…" : `Publish to ${publishChannel}`}
             </Button>
           </div>
         </div>
       </Dialog>
+
+      {/* Channels manager */}
+      <ChannelsDialog
+        projectId={projectId}
+        screenId={screenId}
+        open={channelsOpen}
+        onOpenChange={setChannelsOpen}
+      />
     </div>
   );
 }

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import type { AllocationStrategy, Node, Variant } from "@seam/schema";
+import type { AllocationStrategy, Channel, Node, Variant } from "@seam/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { experiments, publications, screens, snapshots } from "../db/schema";
 import { SeamError } from "../lib/errors";
 import { applyPatches } from "../lib/tree";
+import { getChannelState } from "./channels";
 
 type SnapshotRow = typeof snapshots.$inferSelect;
 type ExperimentRow = typeof experiments.$inferSelect;
@@ -28,6 +29,7 @@ export async function resolveScreen(
   projectId: string,
   path: string,
   userId?: string,
+  channel: Channel = "production",
   overrides?: ResolveOverrides,
 ): Promise<ResolvedScreen> {
   // 1. Find screen by projectId + path
@@ -36,14 +38,19 @@ export async function resolveScreen(
   });
   if (!screen) throw new SeamError("SCREEN_NOT_FOUND", 404, `Screen "${path}" not found`);
 
-  // 2. Find active publication
-  const publication = screen.activePublicationId
+  // 2. Find the active publication for the requested channel
+  const channelState = await getChannelState(screen.id, channel);
+  const publication = channelState
     ? await db.query.publications.findFirst({
-        where: eq(publications.id, screen.activePublicationId),
+        where: eq(publications.id, channelState.activePublicationId),
       })
     : null;
   if (!publication) {
-    throw new SeamError("SCREEN_NOT_PUBLISHED", 404, `Screen "${path}" has no active publication`);
+    throw new SeamError(
+      "SCREEN_NOT_PUBLISHED",
+      404,
+      `Screen "${path}" has no active publication on the "${channel}" channel`,
+    );
   }
 
   // 3. If no experiment, return default snapshot

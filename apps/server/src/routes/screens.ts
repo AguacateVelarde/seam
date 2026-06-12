@@ -1,4 +1,10 @@
-import { CreateScreenSchema, UpdateScreenSchema, slugifyPath } from "@seam/schema";
+import {
+  type Channel,
+  type ChannelState,
+  CreateScreenSchema,
+  UpdateScreenSchema,
+  slugifyPath,
+} from "@seam/schema";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { ulid } from "ulid";
@@ -10,6 +16,7 @@ import { isUniqueViolation } from "../lib/pg-errors";
 import { serializeRow } from "../lib/serialize";
 import { parseBody } from "../lib/validate";
 import { type AuthEnv, requireProjectAccess } from "../middleware/auth";
+import { listChannelStates } from "../services/channels";
 
 export const screensRouter = new Hono<AuthEnv>();
 
@@ -23,42 +30,62 @@ export async function findScreen(projectId: string, screenId: string) {
   return screen;
 }
 
-// Enrich a screen row with status / activeVersion / activeExperiment / lastPublishedAt
+// Enrich a screen row with per-channel publication state. The top-level
+// status/activeVersion/activeExperiment/lastPublishedAt reflect production.
 async function enrichScreen(screen: typeof screens.$inferSelect) {
-  let status: "published" | "draft" | "no_publication" = "no_publication";
-  let activeVersion: number | null = null;
-  let activeExperiment: string | null = null;
-  let lastPublishedAt: string | null = null;
-
   const hasSnapshots = await db.query.snapshots.findFirst({
     where: eq(snapshots.screenId, screen.id),
     columns: { id: true },
   });
-  if (hasSnapshots) status = "draft";
 
-  if (screen.activePublicationId) {
+  const channels: Record<Channel, ChannelState | null> = {
+    development: null,
+    staging: null,
+    production: null,
+  };
+
+  const states = await listChannelStates(screen.id);
+  for (const state of states) {
     const publication = await db.query.publications.findFirst({
-      where: eq(publications.id, screen.activePublicationId),
+      where: eq(publications.id, state.activePublicationId),
     });
-    if (publication) {
-      status = "published";
-      lastPublishedAt = publication.publishedAt.toISOString();
-      const snapshot = await db.query.snapshots.findFirst({
-        where: eq(snapshots.id, publication.snapshotId),
-        columns: { version: true },
+    if (!publication) continue;
+    const snapshot = await db.query.snapshots.findFirst({
+      where: eq(snapshots.id, publication.snapshotId),
+      columns: { version: true },
+    });
+    let experimentName: string | null = null;
+    if (publication.experimentId) {
+      const experiment = await db.query.experiments.findFirst({
+        where: eq(experiments.id, publication.experimentId),
+        columns: { name: true },
       });
-      activeVersion = snapshot?.version ?? null;
-      if (publication.experimentId) {
-        const experiment = await db.query.experiments.findFirst({
-          where: eq(experiments.id, publication.experimentId),
-          columns: { name: true },
-        });
-        activeExperiment = experiment?.name ?? null;
-      }
+      experimentName = experiment?.name ?? null;
     }
+    channels[state.channel as Channel] = {
+      publicationId: publication.id,
+      snapshotId: publication.snapshotId,
+      version: snapshot?.version ?? null,
+      experiment: experimentName,
+      publishedAt: publication.publishedAt.toISOString(),
+    };
   }
 
-  return { ...serializeRow(screen), status, activeVersion, activeExperiment, lastPublishedAt };
+  const production = channels.production;
+  const status: "published" | "draft" | "no_publication" = production
+    ? "published"
+    : hasSnapshots
+      ? "draft"
+      : "no_publication";
+
+  return {
+    ...serializeRow(screen),
+    status,
+    activeVersion: production?.version ?? null,
+    activeExperiment: production?.experiment ?? null,
+    lastPublishedAt: production?.publishedAt ?? null,
+    channels,
+  };
 }
 
 screensRouter.post("/", async (c) => {

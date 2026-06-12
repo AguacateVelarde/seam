@@ -8,7 +8,7 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { db } from "../db/client";
-import { experiments, publications, screens } from "../db/schema";
+import { experiments, publications, screenChannels, screens } from "../db/schema";
 import { SeamError } from "../lib/errors";
 import { param } from "../lib/params";
 import { serializeRow, serializeRows } from "../lib/serialize";
@@ -67,12 +67,18 @@ experimentsRouter.get("/:experimentId", async (c) => {
   const projectId = param(c, "projectId");
   const experiment = await findExperiment(projectId, param(c, "experimentId"));
 
-  // Enrich with affected screens (screens whose active publication references
-  // this experiment) and sticky assignment counts per variant.
+  // Enrich with affected screens (screens with a channel-active publication
+  // referencing this experiment) and sticky assignment counts.
   const affectedScreens = await db
-    .select({ id: screens.id, name: screens.name, path: screens.path })
-    .from(screens)
-    .innerJoin(publications, eq(publications.id, screens.activePublicationId))
+    .select({
+      id: screens.id,
+      name: screens.name,
+      path: screens.path,
+      channel: screenChannels.channel,
+    })
+    .from(screenChannels)
+    .innerJoin(screens, eq(screens.id, screenChannels.screenId))
+    .innerJoin(publications, eq(publications.id, screenChannels.activePublicationId))
     .where(and(eq(screens.projectId, projectId), eq(publications.experimentId, experiment.id)));
 
   const assignmentCount = await stickyStore.count(`seam:ab:${experiment.id}:`);

@@ -8,6 +8,7 @@ import { Segmented } from "../../components/ui/Segmented";
 import { Select } from "../../components/ui/Select";
 import { useExperiments, usePreview, useScreens, useSnapshots } from "../../lib/hooks";
 import { simulateBindings } from "../../lib/simulate";
+import type { Channel } from "../../lib/types";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { toast } from "../../store/toast";
 
@@ -39,6 +40,7 @@ export function ScreenPreview() {
   const [variant, setVariant] = useState("");
   const [snapshotId, setSnapshotId] = useState("");
   const [adapter, setAdapter] = useState("native");
+  const [channel, setChannel] = useState<Channel>("production");
   const [copied, setCopied] = useState(false);
 
   const debouncedParams = useDebouncedValue(
@@ -47,6 +49,7 @@ export function ScreenPreview() {
       variant: variant || undefined,
       snapshotId: snapshotId || undefined,
       adapter: adapter !== "native" ? adapter : undefined,
+      channel: channel !== "production" ? channel : undefined,
     },
     400,
   );
@@ -133,6 +136,14 @@ export function ScreenPreview() {
                   v{snapshot.version}
                 </option>
               ))}
+            </Select>
+          </Field>
+
+          <Field label="Channel" hint="Which release channel to deliver from">
+            <Select value={channel} onChange={(e) => setChannel(e.target.value as Channel)}>
+              <option value="production">Production</option>
+              <option value="staging">Staging</option>
+              <option value="development">Development</option>
             </Select>
           </Field>
 

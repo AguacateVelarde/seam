@@ -1,9 +1,9 @@
 import { CreateComponentSchema, type Node, UpdateComponentSchema } from "@seam/schema";
-import { and, eq, ilike, isNotNull } from "drizzle-orm";
+import { and, eq, ilike } from "drizzle-orm";
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { db } from "../db/client";
-import { components, publications, screens, snapshots } from "../db/schema";
+import { components, publications, screenChannels, screens, snapshots } from "../db/schema";
 import { SeamError } from "../lib/errors";
 import { param } from "../lib/params";
 import { isUniqueViolation } from "../lib/pg-errors";
@@ -89,24 +89,27 @@ componentsRouter.delete("/:componentId", async (c) => {
   const component = await findComponent(projectId, componentId);
 
   // Soft check: block deletion if the component is referenced in any
-  // published snapshot (the snapshot behind a screen's active publication).
+  // published snapshot (active on any channel of any screen).
   const publishedScreens = await db
     .select({ screenName: screens.name, tree: snapshots.tree })
-    .from(screens)
-    .innerJoin(publications, eq(publications.id, screens.activePublicationId))
+    .from(screenChannels)
+    .innerJoin(screens, eq(screens.id, screenChannels.screenId))
+    .innerJoin(publications, eq(publications.id, screenChannels.activePublicationId))
     .innerJoin(snapshots, eq(snapshots.id, publications.snapshotId))
-    .where(and(eq(screens.projectId, projectId), isNotNull(screens.activePublicationId)));
+    .where(eq(screens.projectId, projectId));
 
-  const affected = publishedScreens.filter((row) =>
-    treeUsesComponent(row.tree as Node, component.name),
+  const affected = new Set(
+    publishedScreens
+      .filter((row) => treeUsesComponent(row.tree as Node, component.name))
+      .map((row) => row.screenName),
   );
 
-  if (affected.length > 0) {
+  if (affected.size > 0) {
     throw new SeamError(
       "COMPONENT_IN_USE",
       409,
-      `Component "${component.name}" is used in ${affected.length} published screen(s)`,
-      { affectedScreens: affected.map((row) => row.screenName), count: affected.length },
+      `Component "${component.name}" is used in ${affected.size} published screen(s)`,
+      { affectedScreens: [...affected], count: affected.size },
     );
   }
 

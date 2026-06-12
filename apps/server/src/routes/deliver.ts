@@ -1,4 +1,10 @@
-import { type Node, SEAM_NATIVE_CONTENT_TYPE, type SeamResponse } from "@seam/schema";
+import {
+  type Channel,
+  ChannelSchema,
+  type Node,
+  SEAM_NATIVE_CONTENT_TYPE,
+  type SeamResponse,
+} from "@seam/schema";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../db/client";
@@ -10,6 +16,18 @@ import { getAdapter, getAdapterByName, listAdapters } from "../services/adapter"
 import { resolveScreen } from "../services/audience";
 
 export const deliverRouter = new Hono<AuthEnv>();
+
+// Channel from X-Seam-Channel header or ?channel= query; defaults to production.
+function parseChannel(raw: string | undefined): Channel {
+  if (!raw) return "production";
+  const parsed = ChannelSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new SeamError("INVALID_SCHEMA", 422, `Unknown channel "${raw}"`, {
+      available: ChannelSchema.options,
+    });
+  }
+  return parsed.data;
+}
 
 // Resolve the negotiated content type from an Accept header value.
 // Returns the native type for missing/wildcard/plain-JSON accepts; throws
@@ -65,11 +83,13 @@ deliverRouter.get("/:projectId/screens/:path", requireAuth("read"), async (c) =>
 
   const contentType = negotiateContentType(c.req.header("Accept"));
   const userId = c.req.header("X-User-Id");
-  const resolved = await resolveScreen(projectId, param(c, "path"), userId);
+  const channel = parseChannel(c.req.header("X-Seam-Channel") ?? c.req.query("channel"));
+  const resolved = await resolveScreen(projectId, param(c, "path"), userId, channel);
   const response = buildSeamResponse(resolved, contentType);
 
   c.header("X-Seam-Snapshot", response.snapshot);
   c.header("X-Seam-Version", String(response.version));
+  c.header("X-Seam-Channel", channel);
   if (resolved.experiment && resolved.variant) {
     c.header("X-Seam-Experiment", resolved.experiment.name);
     c.header("X-Seam-Variant", resolved.variant.name);
@@ -89,6 +109,7 @@ deliverRouter.get(
     const projectId = param(c, "projectId");
     const path = param(c, "path");
     const { snapshotId, userId, variant: variantName, adapter: adapterName } = c.req.query();
+    const channel = parseChannel(c.req.query("channel") ?? c.req.header("X-Seam-Channel"));
 
     let contentType = SEAM_NATIVE_CONTENT_TYPE;
     if (adapterName && adapterName !== "native") {
@@ -125,7 +146,7 @@ deliverRouter.get(
         meta: { servedAt: new Date().toISOString(), contentType },
       };
     } else {
-      const resolved = await resolveScreen(projectId, path, userId, { variantName });
+      const resolved = await resolveScreen(projectId, path, userId, channel, { variantName });
       response = buildSeamResponse(resolved, contentType);
       experimentName = resolved.experiment?.name;
       resolvedVariantName = resolved.variant?.name;
@@ -142,6 +163,7 @@ deliverRouter.get(
       `-H 'Accept: ${contentType}'`,
     ];
     if (userId) curlParts.push(`-H 'X-User-Id: ${userId}'`);
+    if (channel !== "production") curlParts.push(`-H 'X-Seam-Channel: ${channel}'`);
     const curlCommand = curlParts.join(" \\\n  ");
 
     return c.json({

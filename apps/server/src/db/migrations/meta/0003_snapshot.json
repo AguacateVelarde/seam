@@ -1,6 +1,6 @@
 {
-  "id": "95274e47-368a-4366-b6f5-aefbc5f0bddf",
-  "prevId": "ca16e243-87c3-44a5-a6d2-6e94039c4c76",
+  "id": "c01990a4-b056-4403-937b-2bc9ec4ace93",
+  "prevId": "95274e47-368a-4366-b6f5-aefbc5f0bddf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -542,6 +542,14 @@
           "primaryKey": false,
           "notNull": false
         },
+        "channel": {
+          "name": "channel",
+          "type": "channel",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'production'"
+        },
         "is_default": {
           "name": "is_default",
           "type": "boolean",
@@ -615,6 +623,77 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.screen_channels": {
+      "name": "screen_channels",
+      "schema": "",
+      "columns": {
+        "screen_id": {
+          "name": "screen_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "channel": {
+          "name": "channel",
+          "type": "channel",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active_publication_id": {
+          "name": "active_publication_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "screen_channels_pk": {
+          "name": "screen_channels_pk",
+          "columns": [
+            {
+              "expression": "screen_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "screen_channels_screen_id_screens_id_fk": {
+          "name": "screen_channels_screen_id_screens_id_fk",
+          "tableFrom": "screen_channels",
+          "tableTo": "screens",
+          "columnsFrom": ["screen_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.screens": {
       "name": "screens",
       "schema": "",
@@ -645,12 +724,6 @@
         },
         "description": {
           "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "active_publication_id": {
-          "name": "active_publication_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1050,6 +1123,11 @@
     }
   },
   "enums": {
+    "public.channel": {
+      "name": "channel",
+      "schema": "public",
+      "values": ["development", "staging", "production"]
+    },
     "public.experiment_status": {
       "name": "experiment_status",
       "schema": "public",

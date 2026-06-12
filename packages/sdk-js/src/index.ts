@@ -16,6 +16,8 @@ export type GetScreenOptions = {
   userId?: string;
   /** Adapter subtype, e.g. "stac" or "divkit". Omit for native Seam UIDL. */
   adapter?: string;
+  /** Release channel (sent as X-Seam-Channel). Defaults to "production" server-side. */
+  channel?: "development" | "staging" | "production";
   /** Abort signal for the request */
   signal?: AbortSignal;
 };
@@ -65,6 +67,7 @@ export class SeamClient {
       Accept: accept,
     };
     if (options.userId) headers["X-User-Id"] = options.userId;
+    if (options.channel) headers["X-Seam-Channel"] = options.channel;
 
     const url = `${this.baseUrl}/v1/deliver/${this.projectId}/screens/${encodeURIComponent(path)}`;
     const res = await this.fetchImpl(url, { headers, signal: options.signal });

@@ -380,10 +380,38 @@ export const openApiDocument = {
         responses: { "200": { description: "OK" } },
       },
     },
+    "/v1/projects/{projectId}/screens/{screenId}/publications/promote": {
+      post: {
+        tags: ["publications"],
+        summary:
+          "Promote the active publication from one channel to another (e.g. staging → production)",
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  from: { type: "string", enum: ["development", "staging", "production"] },
+                  to: { type: "string", enum: ["development", "staging", "production"] },
+                  publishedBy: { type: "string" },
+                },
+                required: ["from", "to"],
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Promoted" },
+          "404": { description: "Nothing published on the source channel" },
+          "409": { description: "EXPERIMENT_CONFLICT (experiment no longer active/valid)" },
+        },
+      },
+    },
     "/v1/projects/{projectId}/screens/{screenId}/publications": {
       post: {
         tags: ["publications"],
-        summary: "Publish a snapshot (optionally with an active experiment)",
+        summary:
+          "Publish a snapshot to a channel (default production), optionally with an active experiment",
         parameters: [seamKeyHeader],
         requestBody: {
           content: {
@@ -449,10 +477,16 @@ export const openApiDocument = {
         tags: ["deliver"],
         summary: "Deliver a published screen",
         description:
-          "Content negotiation via Accept: application/vnd.seam+json (native, default), application/vnd.seam.stac+json, application/vnd.seam.divkit+json. Sticky A/B via X-User-Id.",
+          "Content negotiation via Accept: application/vnd.seam+json (native, default), application/vnd.seam.stac+json, application/vnd.seam.divkit+json. Sticky A/B via X-User-Id. Release channel via X-Seam-Channel (development | staging | production; default production).",
         parameters: [
           seamKeyHeader,
           { name: "X-User-Id", in: "header", required: false, schema: { type: "string" } },
+          {
+            name: "X-Seam-Channel",
+            in: "header",
+            required: false,
+            schema: { type: "string", enum: ["development", "staging", "production"] },
+          },
           { name: "Accept", in: "header", required: false, schema: { type: "string" } },
         ],
         responses: {

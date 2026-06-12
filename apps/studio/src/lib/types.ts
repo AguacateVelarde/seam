@@ -3,6 +3,8 @@ export type {
   ActionParam,
   AllocationStrategy,
   ApiKeyInfo,
+  Channel,
+  ChannelState,
   Component,
   ComponentProp,
   ConditionRule,
@@ -26,7 +28,13 @@ export type {
   WorkspaceRole,
 } from "@seam/schema";
 
-export { actionNameRegex, componentNameRegex, slugifyPath } from "@seam/schema";
+export {
+  CHANNELS,
+  actionNameRegex,
+  componentNameRegex,
+  nextChannel,
+  slugifyPath,
+} from "@seam/schema";
 
 import type { Experiment, User, Workspace, WorkspaceRole } from "@seam/schema";
 

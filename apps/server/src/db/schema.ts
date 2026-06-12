@@ -19,6 +19,8 @@ export const experimentStatusEnum = pgEnum("experiment_status", [
   "concluded",
 ]);
 
+export const channelEnum = pgEnum("channel", ["development", "staging", "production"]);
+
 // --- Users & sessions ---
 
 export const users = pgTable(
@@ -157,11 +159,25 @@ export const screens = pgTable(
     name: text("name").notNull(),
     path: text("path").notNull(), // e.g. "home", "credit-detail"
     description: text("description"),
-    activePublicationId: text("active_publication_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [uniqueIndex("screens_project_path").on(table.projectId, table.path)],
+);
+
+// --- Channel state (which publication is live per screen + channel) ---
+
+export const screenChannels = pgTable(
+  "screen_channels",
+  {
+    screenId: text("screen_id")
+      .notNull()
+      .references(() => screens.id, { onDelete: "cascade" }),
+    channel: channelEnum("channel").notNull(),
+    activePublicationId: text("active_publication_id").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("screen_channels_pk").on(table.screenId, table.channel)],
 );
 
 // --- Snapshots (immutable) ---
@@ -214,6 +230,7 @@ export const publications = pgTable(
       .notNull()
       .references(() => snapshots.id),
     experimentId: text("experiment_id").references(() => experiments.id),
+    channel: channelEnum("channel").default("production").notNull(),
     isDefault: boolean("is_default").default(false).notNull(),
     publishedAt: timestamp("published_at").defaultNow().notNull(),
     publishedBy: text("published_by"),

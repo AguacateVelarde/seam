@@ -8,6 +8,7 @@ import type {
   AllocationStrategy,
   ApiKeyInfo,
   AuthResponse,
+  Channel,
   Component,
   ComponentProp,
   CreatedApiKey,
@@ -43,6 +44,8 @@ export const keys = {
   projects: ["projects"] as const,
   project: (projectId: string) => ["projects", projectId] as const,
   screens: (projectId: string) => ["projects", projectId, "screens"] as const,
+  screen: (projectId: string, screenId: string) =>
+    ["projects", projectId, "screens", screenId] as const,
   components: (projectId: string) => ["projects", projectId, "components"] as const,
   actions: (projectId: string) => ["projects", projectId, "actions"] as const,
   snapshots: (projectId: string, screenId: string) =>
@@ -336,6 +339,15 @@ export function useScreens(projectId: string) {
   });
 }
 
+/** Enriched screen detail (ScreenListItem shape, including per-channel state). */
+export function useScreen(projectId: string, screenId: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.screen(projectId, screenId),
+    queryFn: () => api<ScreenListItem>(`/v1/projects/${projectId}/screens/${screenId}`),
+    enabled: Boolean(projectId && screenId) && enabled,
+  });
+}
+
 export function useCreateScreen(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -488,26 +500,56 @@ export function useCreateSnapshot(projectId: string, screenId: string) {
 
 /* ----------------------------- Publications --------------------------- */
 
-export function usePublications(projectId: string, screenId: string) {
+export function usePublications(projectId: string, screenId: string, channel?: Channel) {
   return useQuery({
-    queryKey: keys.publications(projectId, screenId),
-    queryFn: () => api<Publication[]>(`/v1/projects/${projectId}/screens/${screenId}/publications`),
+    queryKey: channel
+      ? ([...keys.publications(projectId, screenId), channel] as const)
+      : keys.publications(projectId, screenId),
+    queryFn: () =>
+      api<Publication[]>(`/v1/projects/${projectId}/screens/${screenId}/publications`, {
+        query: { channel },
+      }),
     enabled: Boolean(projectId && screenId),
   });
+}
+
+/**
+ * Refresh everything that reflects publication state: the screens list, the
+ * enriched screen detail (per-channel chips) and the publication history.
+ * `keys.screens` is a prefix of both, but stay explicit for clarity.
+ */
+function invalidatePublicationData(qc: QueryClient, projectId: string, screenId: string) {
+  qc.invalidateQueries({ queryKey: keys.screens(projectId) });
+  qc.invalidateQueries({ queryKey: keys.screen(projectId, screenId) });
+  qc.invalidateQueries({ queryKey: keys.publications(projectId, screenId) });
 }
 
 export function useCreatePublication(projectId: string, screenId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { snapshotId: string; experimentId?: string; publishedBy?: string }) =>
+    mutationFn: (body: {
+      snapshotId: string;
+      experimentId?: string;
+      channel?: Channel;
+      publishedBy?: string;
+    }) =>
       api<Publication>(`/v1/projects/${projectId}/screens/${screenId}/publications`, {
         method: "POST",
         body,
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: keys.publications(projectId, screenId) });
-      qc.invalidateQueries({ queryKey: keys.screens(projectId) });
-    },
+    onSuccess: () => invalidatePublicationData(qc, projectId, screenId),
+  });
+}
+
+export function usePromotePublication(projectId: string, screenId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { from: Channel; to: Channel; publishedBy?: string }) =>
+      api<Publication>(`/v1/projects/${projectId}/screens/${screenId}/publications/promote`, {
+        method: "POST",
+        body,
+      }),
+    onSuccess: () => invalidatePublicationData(qc, projectId, screenId),
   });
 }
 
@@ -518,10 +560,7 @@ export function useDeletePublication(projectId: string, screenId: string) {
       api<void>(`/v1/projects/${projectId}/screens/${screenId}/publications/${publicationId}`, {
         method: "DELETE",
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: keys.publications(projectId, screenId) });
-      qc.invalidateQueries({ queryKey: keys.screens(projectId) });
-    },
+    onSuccess: () => invalidatePublicationData(qc, projectId, screenId),
   });
 }
 
@@ -595,6 +634,7 @@ export interface PreviewParams {
   userId?: string;
   variant?: string;
   adapter?: string;
+  channel?: Channel;
 }
 
 export function usePreview(projectId: string, path: string | undefined, params: PreviewParams) {
