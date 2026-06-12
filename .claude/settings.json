@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun install)",
+      "Bash(bun test:*)",
+      "Bash(bun run build:*)",
+      "Bash(bun run typecheck:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(bunx biome:*)",
+      "Bash(bunx turbo:*)",
+      "Bash(bunx drizzle-kit generate:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": [
+      "Bash(docker compose down -v:*)",
+      "Bash(rm -rf:*)",
+      "Read(./apps/server/.env)",
+      "Read(./apps/studio/.env.local)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/biome-on-edit.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

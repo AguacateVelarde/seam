@@ -5,3 +5,7 @@ dist/
 .env
 .env.local
 .DS_Store
+
+# AI tooling — personal/machine-specific
+CLAUDE.local.md
+.claude/settings.local.json
