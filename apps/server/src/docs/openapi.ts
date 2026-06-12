@@ -72,7 +72,11 @@ export const openApiDocument = {
     { name: "screens" },
     { name: "snapshots", description: "Immutable — only POST and GET" },
     { name: "publications", description: "Immutable — DELETE performs rollback" },
-    { name: "experiments" },
+    {
+      name: "experiments",
+      description:
+        "A/B experiments target a screen; each variant is a list of patches (hide node / override props / replace conditions) applied to the published base snapshot at delivery time. Control = empty patch list.",
+    },
     { name: "deliver", description: "Delivery API for client renderers" },
   ],
   paths: {

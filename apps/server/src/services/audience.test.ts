@@ -7,18 +7,21 @@ const variants: Variant[] = [
     id: "01JBXW5CSAH8YJ3GVKQZJ5W7A1",
     name: "control",
     weight: 0.5,
+    patches: [],
     snapshotId: "01JBXW5CSAH8YJ3GVKQZJ5W7S1",
   },
   {
     id: "01JBXW5CSAH8YJ3GVKQZJ5W7A2",
     name: "treatment",
     weight: 0.3,
+    patches: [],
     snapshotId: "01JBXW5CSAH8YJ3GVKQZJ5W7S2",
   },
   {
     id: "01JBXW5CSAH8YJ3GVKQZJ5W7A3",
     name: "wild",
     weight: 0.2,
+    patches: [],
     snapshotId: "01JBXW5CSAH8YJ3GVKQZJ5W7S3",
   },
 ];

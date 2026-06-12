@@ -1,10 +1,11 @@
-import { CreatePublicationSchema } from "@seam/schema";
+import { CreatePublicationSchema, type Node, type Variant } from "@seam/schema";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { db } from "../db/client";
 import { experiments, publications, screens, snapshots } from "../db/schema";
 import { SeamError } from "../lib/errors";
+import { collectNodeIds } from "../lib/tree";
 import { param } from "../lib/params";
 import { serializeRow, serializeRows } from "../lib/serialize";
 import { parseBody } from "../lib/validate";
@@ -44,6 +45,29 @@ publicationsRouter.post("/", async (c) => {
         "EXPERIMENT_CONFLICT",
         409,
         `Experiment must be active to publish (current status: ${experiment.status})`,
+      );
+    }
+
+    // Patch-based variants must reference nodes that exist in the base
+    // snapshot being published — and may not hide its root.
+    const tree = snapshot.tree as Node;
+    const nodeIds = collectNodeIds(tree);
+    const problems: string[] = [];
+    for (const variant of experiment.variants as Variant[]) {
+      for (const patch of variant.patches ?? []) {
+        if (!nodeIds.has(patch.nodeId)) {
+          problems.push(`variant "${variant.name}": node ${patch.nodeId} not in snapshot`);
+        } else if (patch.op === "hide" && patch.nodeId === tree.id) {
+          problems.push(`variant "${variant.name}": cannot hide the root node`);
+        }
+      }
+    }
+    if (problems.length > 0) {
+      throw new SeamError(
+        "EXPERIMENT_CONFLICT",
+        409,
+        "Experiment patches do not match the snapshot being published",
+        { problems },
       );
     }
   }

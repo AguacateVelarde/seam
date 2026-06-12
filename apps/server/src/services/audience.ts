@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import type { AllocationStrategy, Variant } from "@seam/schema";
+import type { AllocationStrategy, Node, Variant } from "@seam/schema";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { experiments, publications, screens, snapshots } from "../db/schema";
 import { SeamError } from "../lib/errors";
+import { applyPatches } from "../lib/tree";
 
 type SnapshotRow = typeof snapshots.$inferSelect;
 type ExperimentRow = typeof experiments.$inferSelect;
@@ -11,6 +12,9 @@ type ExperimentRow = typeof experiments.$inferSelect;
 export type ResolvedScreen = {
   screen: typeof screens.$inferSelect;
   snapshot: SnapshotRow;
+  // The tree to serve: the snapshot's tree, with the variant's patches
+  // applied when an experiment is active.
+  tree: Node;
   experiment: ExperimentRow | null;
   variant: Variant | null;
 };
@@ -45,7 +49,7 @@ export async function resolveScreen(
   // 3. If no experiment, return default snapshot
   if (!publication.experimentId) {
     const snapshot = await getSnapshot(publication.snapshotId);
-    return { screen, snapshot, experiment: null, variant: null };
+    return { screen, snapshot, tree: snapshot.tree as Node, experiment: null, variant: null };
   }
 
   // 4. Resolve experiment variant
@@ -54,7 +58,7 @@ export async function resolveScreen(
   // A paused/concluded experiment falls back to the publication's default snapshot
   if (experiment.status !== "active") {
     const snapshot = await getSnapshot(publication.snapshotId);
-    return { screen, snapshot, experiment: null, variant: null };
+    return { screen, snapshot, tree: snapshot.tree as Node, experiment: null, variant: null };
   }
 
   const variants = experiment.variants as Variant[];
@@ -73,7 +77,21 @@ export async function resolveScreen(
     variant = await resolveVariant(experiment, userId);
   }
 
-  return { screen, snapshot: await getSnapshot(variant.snapshotId), experiment, variant };
+  // Legacy variants reference a full alternate snapshot; patch-based variants
+  // transform the publication's base snapshot at delivery time.
+  if (variant.snapshotId) {
+    const snapshot = await getSnapshot(variant.snapshotId);
+    return { screen, snapshot, tree: snapshot.tree as Node, experiment, variant };
+  }
+
+  const snapshot = await getSnapshot(publication.snapshotId);
+  const tree = applyPatches(snapshot.tree as Node, variant.patches ?? []);
+  if (!tree) {
+    // Patches removed the root — misconfigured experiment (publish-time
+    // validation rejects this, but old data could still contain it).
+    throw new SeamError("INTERNAL_ERROR", 500, "Variant patches removed the root node");
+  }
+  return { screen, snapshot, tree, experiment, variant };
 }
 
 export async function resolveVariant(experiment: ExperimentRow, userId?: string): Promise<Variant> {

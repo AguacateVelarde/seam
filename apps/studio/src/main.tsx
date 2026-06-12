@@ -19,7 +19,14 @@ const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (error) => {
       if (error instanceof ApiError) {
-        toast.error(`${error.code}: ${error.message}`);
+        // e.g. EXPERIMENT_CONFLICT (409) ships meta.problems with the list of
+        // invalid patches — surface them so the toast is actionable.
+        const problems = (error.meta as { problems?: unknown } | null)?.problems;
+        const detail =
+          Array.isArray(problems) && problems.length > 0
+            ? ` — ${problems.map(String).join("; ")}`
+            : "";
+        toast.error(`${error.code}: ${error.message}${detail}`);
       } else {
         toast.error(error instanceof Error ? error.message : "Something went wrong");
       }

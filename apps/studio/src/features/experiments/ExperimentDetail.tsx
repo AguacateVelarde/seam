@@ -1,13 +1,24 @@
-import { ArrowLeft, Lock, Pause, Play, Square } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  MonitorSmartphone,
+  Pause,
+  Play,
+  Square,
+} from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { cx } from "../../lib/cx";
 import { shortId } from "../../lib/format";
-import { useExperiment, useUpdateExperiment } from "../../lib/hooks";
+import { useExperiment, useScreens, useSnapshots, useUpdateExperiment } from "../../lib/hooks";
 import type { ExperimentStatus } from "../../lib/types";
 import { toast } from "../../store/toast";
 import { experimentStatusTone } from "./ExperimentList";
+import { describePatch, indexNodes, summarizePatches } from "./PatchTree";
 
 const VARIANT_COLORS = [
   "bg-blue-500",
@@ -44,6 +55,17 @@ export function ExperimentDetail() {
   const { data: experiment, isLoading } = useExperiment(projectId, experimentId);
   const updateExperiment = useUpdateExperiment(projectId, experimentId);
 
+  const { data: screens } = useScreens(projectId);
+  const targetScreenId = experiment?.screenId ?? "";
+  // The target screen's latest snapshot tree resolves patch nodeIds → components.
+  const snapshotsQuery = useSnapshots(projectId, targetScreenId);
+  const nodeIndex = useMemo(
+    () => indexNodes(snapshotsQuery.data?.[0]?.tree),
+    [snapshotsQuery.data],
+  );
+
+  const [expandedVariants, setExpandedVariants] = useState<Record<string, boolean>>({});
+
   async function transitionTo(status: ExperimentStatus) {
     try {
       await updateExperiment.mutateAsync({ status });
@@ -59,6 +81,8 @@ export function ExperimentDetail() {
   if (!experiment) {
     return <p className="px-8 py-8 text-sm text-slate-500">Experiment not found.</p>;
   }
+
+  const targetScreen = screens?.find((s) => s.id === experiment.screenId);
 
   const strategySummary =
     experiment.strategy.type === "user_id"
@@ -93,6 +117,32 @@ export function ExperimentDetail() {
           </Button>
         ))}
       </div>
+
+      {/* Target screen */}
+      {experiment.screenId && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-1 text-sm font-semibold text-slate-900">Target screen</h2>
+          <div className="flex items-center gap-3">
+            <MonitorSmartphone size={15} className="shrink-0 text-slate-400" />
+            {targetScreen ? (
+              <>
+                <span className="text-sm font-medium text-slate-800">{targetScreen.name}</span>
+                <span className="font-mono text-xs text-slate-400">/{targetScreen.path}</span>
+              </>
+            ) : (
+              <span className="font-mono text-xs text-slate-500">
+                {shortId(experiment.screenId, 14)}
+              </span>
+            )}
+            <div className="flex-1" />
+            <Link to={`/${projectId}/screens/${experiment.screenId}`}>
+              <Button variant="secondary" size="sm">
+                Open editor
+              </Button>
+            </Link>
+          </div>
+        </section>
+      )}
 
       {/* Strategy */}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -134,29 +184,81 @@ export function ExperimentDetail() {
             <tr>
               <th className="py-2 font-medium">Variant</th>
               <th className="py-2 font-medium">Weight</th>
-              <th className="py-2 font-medium">Snapshot</th>
+              <th className="py-2 font-medium">Patches</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {experiment.variants.map((variant, index) => (
-              <tr key={variant.id}>
-                <td className="py-2.5">
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={cx(
-                        "h-2.5 w-2.5 rounded-full",
-                        VARIANT_COLORS[index % VARIANT_COLORS.length],
+            {experiment.variants.map((variant, index) => {
+              const isLegacy = Boolean(variant.snapshotId);
+              const patches = variant.patches ?? [];
+              const expanded = Boolean(expandedVariants[variant.id]);
+              return (
+                <Fragment key={variant.id}>
+                  <tr>
+                    <td className="py-2.5">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={cx(
+                            "h-2.5 w-2.5 rounded-full",
+                            VARIANT_COLORS[index % VARIANT_COLORS.length],
+                          )}
+                        />
+                        <span className="font-medium text-slate-800">{variant.name}</span>
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-slate-600">
+                      {Math.round(variant.weight * 1000) / 10}%
+                    </td>
+                    <td className="py-2.5">
+                      {isLegacy ? (
+                        <span className="flex items-center gap-2">
+                          <Badge tone="yellow">legacy snapshot variant</Badge>
+                          <span
+                            className="font-mono text-xs text-slate-400"
+                            title={variant.snapshotId}
+                          >
+                            {shortId(variant.snapshotId ?? "", 12)}
+                          </span>
+                        </span>
+                      ) : patches.length === 0 ? (
+                        <span className="text-xs text-slate-400">no patches (base snapshot)</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedVariants((prev) => ({
+                              ...prev,
+                              [variant.id]: !prev[variant.id],
+                            }))
+                          }
+                          className="flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900"
+                          title={expanded ? "Hide patch details" : "Show patch details"}
+                        >
+                          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          {summarizePatches(patches)}
+                        </button>
                       )}
-                    />
-                    <span className="font-medium text-slate-800">{variant.name}</span>
-                  </span>
-                </td>
-                <td className="py-2.5 text-slate-600">{Math.round(variant.weight * 1000) / 10}%</td>
-                <td className="py-2.5 font-mono text-xs text-slate-500" title={variant.snapshotId}>
-                  {shortId(variant.snapshotId, 14)}
-                </td>
-              </tr>
-            ))}
+                    </td>
+                  </tr>
+                  {expanded && patches.length > 0 && (
+                    <tr>
+                      <td colSpan={3} className="pb-3">
+                        <ul className="ml-5 space-y-1 rounded-md bg-slate-50 px-3 py-2">
+                          {patches.map((patch, patchIndex) => (
+                            <li
+                              key={`${patch.op}-${patch.nodeId}-${patchIndex}`}
+                              className="font-mono text-xs text-slate-600"
+                            >
+                              {describePatch(patch, nodeIndex)}
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </section>

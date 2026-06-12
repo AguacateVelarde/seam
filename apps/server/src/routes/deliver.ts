@@ -48,7 +48,7 @@ function buildSeamResponse(
       resolved.experiment && resolved.variant
         ? { id: resolved.experiment.id, variant: resolved.variant.name }
         : undefined,
-    tree: resolved.snapshot.tree as Node,
+    tree: resolved.tree,
     meta: {
       servedAt: new Date().toISOString(),
       contentType,

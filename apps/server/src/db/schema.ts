@@ -189,6 +189,8 @@ export const experiments = pgTable("experiments", {
   projectId: text("project_id")
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),
+  // Target screen — variant patches reference node ids from its snapshots.
+  screenId: text("screen_id").references(() => screens.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   // JSON: AllocationStrategy
   strategy: jsonb("strategy").notNull(),

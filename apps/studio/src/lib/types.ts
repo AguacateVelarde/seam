@@ -20,6 +20,7 @@ export type {
   Snapshot,
   User,
   Variant,
+  VariantPatch,
   Workspace,
   WorkspaceMember,
   WorkspaceRole,

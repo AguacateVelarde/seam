@@ -557,8 +557,12 @@ export function useExperiment(projectId: string, experimentId: string) {
 export function useCreateExperiment(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; strategy: AllocationStrategy; variants: Variant[] }) =>
-      api<Experiment>(`/v1/projects/${projectId}/experiments`, { method: "POST", body }),
+    mutationFn: (body: {
+      name: string;
+      screenId?: string;
+      strategy: AllocationStrategy;
+      variants: Variant[];
+    }) => api<Experiment>(`/v1/projects/${projectId}/experiments`, { method: "POST", body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.experiments(projectId) }),
   });
 }
@@ -568,6 +572,7 @@ export function useUpdateExperiment(projectId: string, experimentId: string) {
   return useMutation({
     mutationFn: (body: {
       name?: string;
+      screenId?: string;
       strategy?: AllocationStrategy;
       variants?: Variant[];
       status?: ExperimentStatus;

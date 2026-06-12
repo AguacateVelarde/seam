@@ -28,14 +28,23 @@ async function findExperiment(projectId: string, experimentId: string) {
   return experiment;
 }
 
+async function assertScreenInProject(projectId: string, screenId: string) {
+  const screen = await db.query.screens.findFirst({
+    where: and(eq(screens.id, screenId), eq(screens.projectId, projectId)),
+  });
+  if (!screen) throw new SeamError("SCREEN_NOT_FOUND", 404, "Target screen not found in project");
+}
+
 experimentsRouter.post("/", async (c) => {
   const projectId = param(c, "projectId");
   const body = parseBody(CreateExperimentSchema, await c.req.json());
+  if (body.screenId) await assertScreenInProject(projectId, body.screenId);
   const [created] = await db
     .insert(experiments)
     .values({
       id: ulid(),
       projectId,
+      screenId: body.screenId,
       name: body.name,
       strategy: body.strategy,
       variants: body.variants,
@@ -89,7 +98,7 @@ experimentsRouter.patch("/:experimentId", async (c) => {
     }
   }
 
-  // name, strategy, variants are only mutable while the experiment is a draft.
+  // name, strategy, variants, target screen are only mutable while in draft.
   if (experiment.status !== "draft") {
     if (body.variants) {
       throw new SeamError(
@@ -98,19 +107,22 @@ experimentsRouter.patch("/:experimentId", async (c) => {
         "Variants can only be modified while the experiment is in draft status",
       );
     }
-    if (body.strategy || body.name) {
+    if (body.strategy || body.name || body.screenId) {
       throw new SeamError(
         "EXPERIMENT_CONFLICT",
         409,
-        "Name and strategy can only be modified while the experiment is in draft status",
+        "Name, strategy and target screen can only be modified while the experiment is in draft status",
       );
     }
   }
+
+  if (body.screenId) await assertScreenInProject(projectId, body.screenId);
 
   const [updated] = await db
     .update(experiments)
     .set({
       ...(body.name ? { name: body.name } : {}),
+      ...(body.screenId ? { screenId: body.screenId } : {}),
       ...(body.strategy ? { strategy: body.strategy } : {}),
       ...(body.variants ? { variants: body.variants } : {}),
       ...(body.status ? { status: body.status } : {}),

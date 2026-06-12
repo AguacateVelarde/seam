@@ -1,118 +1,71 @@
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ulid } from "ulid";
 import { Button } from "../../components/ui/Button";
-import { Dialog } from "../../components/ui/Dialog";
-import { Field, Input, Label } from "../../components/ui/Input";
+import { Field, Input } from "../../components/ui/Input";
 import { Segmented } from "../../components/ui/Segmented";
 import { Select } from "../../components/ui/Select";
 import { Switch } from "../../components/ui/Switch";
 import { cx } from "../../lib/cx";
-import { formatDateTime, shortId } from "../../lib/format";
 import { useCreateExperiment, useScreens, useSnapshots } from "../../lib/hooks";
-import type { AllocationStrategy } from "../../lib/types";
+import type { AllocationStrategy, VariantPatch } from "../../lib/types";
 import { toast } from "../../store/toast";
+import { PatchTree } from "./PatchTree";
 
 interface VariantDraft {
   key: string;
   name: string;
   weightPct: string;
-  snapshotId: string;
+  patches: VariantPatch[];
 }
 
 function newVariantDraft(name: string, weightPct: string): VariantDraft {
-  return { key: ulid(), name, weightPct, snapshotId: "" };
+  return { key: ulid(), name, weightPct, patches: [] };
 }
-
-/* --------------------------- Snapshot picker --------------------------- */
-
-function SnapshotPicker({
-  projectId,
-  open,
-  onClose,
-  onPick,
-}: {
-  projectId: string;
-  open: boolean;
-  onClose: () => void;
-  onPick: (snapshotId: string) => void;
-}) {
-  const { data: screens } = useScreens(projectId);
-  const [screenId, setScreenId] = useState("");
-  const snapshotsQuery = useSnapshots(projectId, screenId);
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()} title="Pick a snapshot">
-      <div className="space-y-4">
-        <div>
-          <Label>Screen</Label>
-          <Select value={screenId} onChange={(e) => setScreenId(e.target.value)}>
-            <option value="">Select a screen…</option>
-            {(screens ?? []).map((screen) => (
-              <option key={screen.id} value={screen.id}>
-                {screen.name} ({screen.path})
-              </option>
-            ))}
-          </Select>
-        </div>
-        {screenId && (
-          <div className="max-h-64 overflow-y-auto rounded-md border border-slate-200">
-            {snapshotsQuery.isLoading ? (
-              <p className="p-3 text-xs text-slate-400">Loading snapshots…</p>
-            ) : (snapshotsQuery.data ?? []).length === 0 ? (
-              <p className="p-3 text-xs text-slate-400">This screen has no snapshots yet.</p>
-            ) : (
-              (snapshotsQuery.data ?? []).map((snapshot) => (
-                <button
-                  key={snapshot.id}
-                  type="button"
-                  onClick={() => {
-                    onPick(snapshot.id);
-                    onClose();
-                  }}
-                  className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left text-xs last:border-b-0 hover:bg-slate-50"
-                >
-                  <span className="font-medium text-slate-800">v{snapshot.version}</span>
-                  <span className="text-slate-400">{formatDateTime(snapshot.createdAt)}</span>
-                  <span className="font-mono text-slate-400">{shortId(snapshot.id, 10)}</span>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-      </div>
-    </Dialog>
-  );
-}
-
-/* ------------------------------- Page ---------------------------------- */
 
 export function ExperimentNew() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const createExperiment = useCreateExperiment(projectId);
 
+  const { data: screens } = useScreens(projectId);
+
   const [name, setName] = useState("");
+  const [screenId, setScreenId] = useState("");
   const [strategyType, setStrategyType] = useState<"user_id" | "percentage">("user_id");
   const [header, setHeader] = useState("X-User-Id");
   const [sticky, setSticky] = useState(false);
   const [ttlDays, setTtlDays] = useState("30");
   const [variants, setVariants] = useState<VariantDraft[]>([
-    newVariantDraft("Control", "50"),
-    newVariantDraft("Variant B", "50"),
+    newVariantDraft("control", "50"),
+    newVariantDraft("treatment", "50"),
   ]);
-  const [pickerFor, setPickerFor] = useState<string | null>(null);
+
+  // The latest snapshot of the target screen is the reference tree patches
+  // are defined against (delivery applies them to the published snapshot).
+  const snapshotsQuery = useSnapshots(projectId, screenId);
+  const referenceTree = snapshotsQuery.data?.[0]?.tree ?? null;
+  const snapshotsLoaded = Boolean(screenId) && snapshotsQuery.isSuccess;
 
   const weightSum = variants.reduce((sum, v) => sum + (Number(v.weightPct) || 0), 0);
   const weightsValid = Math.abs(weightSum - 100) < 0.01;
-  const variantsValid =
-    variants.length >= 2 && variants.every((v) => v.name.trim() && v.snapshotId.trim());
+  const variantsValid = variants.length >= 2 && variants.every((v) => v.name.trim());
   const canSubmit =
-    Boolean(name.trim()) && weightsValid && variantsValid && !createExperiment.isPending;
+    Boolean(name.trim()) &&
+    Boolean(screenId) &&
+    weightsValid &&
+    variantsValid &&
+    !createExperiment.isPending;
 
   function patchVariant(key: string, patch: Partial<VariantDraft>) {
     setVariants((prev) => prev.map((v) => (v.key === key ? { ...v, ...patch } : v)));
+  }
+
+  function handleScreenChange(nextScreenId: string) {
+    setScreenId(nextScreenId);
+    // Patches reference node ids from the previous screen's tree — drop them.
+    setVariants((prev) => prev.map((v) => ({ ...v, patches: [] })));
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -125,12 +78,13 @@ export function ExperimentNew() {
     try {
       const experiment = await createExperiment.mutateAsync({
         name: name.trim(),
+        screenId,
         strategy,
         variants: variants.map((v) => ({
           id: ulid(),
           name: v.name.trim(),
           weight: (Number(v.weightPct) || 0) / 100,
-          snapshotId: v.snapshotId.trim(),
+          patches: v.patches,
         })),
       });
       toast.success(`Created experiment ${experiment.name}`);
@@ -162,6 +116,19 @@ export function ExperimentNew() {
             placeholder="homepage-hero-test"
             autoFocus
           />
+        </Field>
+        <Field
+          label="Target screen"
+          hint="Variants are defined as patches against this screen's snapshot tree."
+        >
+          <Select value={screenId} onChange={(e) => handleScreenChange(e.target.value)}>
+            <option value="">Select a screen…</option>
+            {(screens ?? []).map((screen) => (
+              <option key={screen.id} value={screen.id}>
+                {screen.name} ({screen.path})
+              </option>
+            ))}
+          </Select>
         </Field>
       </section>
 
@@ -240,68 +207,75 @@ export function ExperimentNew() {
           <p className="mb-3 text-xs text-red-600">Variant weights must sum to 100%.</p>
         )}
 
-        <div className="space-y-2">
+        {!screenId ? (
+          <p className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            Select a target screen to define per-variant patches.
+          </p>
+        ) : snapshotsQuery.isLoading ? (
+          <p className="mb-3 text-xs text-slate-400">Loading snapshots…</p>
+        ) : snapshotsLoaded && !referenceTree ? (
+          <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Create a snapshot of this screen first to define patches. You can still save the
+            experiment with empty patches.
+          </p>
+        ) : null}
+
+        <div className="space-y-3">
           {variants.map((variant) => (
-            <div key={variant.key} className="flex items-center gap-2">
-              <Input
-                value={variant.name}
-                onChange={(e) => patchVariant(variant.key, { name: e.target.value })}
-                placeholder="Variant name"
-                className="w-40"
-                error={!variant.name.trim()}
-              />
-              <div className="relative">
+            <div key={variant.key} className="rounded-md border border-slate-200 p-3">
+              <div className="flex items-center gap-2">
                 <Input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={variant.weightPct}
-                  onChange={(e) => patchVariant(variant.key, { weightPct: e.target.value })}
-                  className="w-24 pr-7"
-                  error={!weightsValid}
+                  value={variant.name}
+                  onChange={(e) => patchVariant(variant.key, { name: e.target.value })}
+                  placeholder="Variant name"
+                  className="w-44"
+                  error={!variant.name.trim()}
                 />
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">
-                  %
+                <div className="relative w-24 shrink-0">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={variant.weightPct}
+                    onChange={(e) => patchVariant(variant.key, { weightPct: e.target.value })}
+                    className="[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    style={{ paddingRight: "1.75rem" }}
+                    error={!weightsValid}
+                  />
+                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                    %
+                  </span>
+                </div>
+                <span className="text-xs text-slate-400">
+                  {variant.patches.length === 0
+                    ? "No patches (serves the published base)"
+                    : `${variant.patches.length} ${variant.patches.length === 1 ? "patch" : "patches"}`}
                 </span>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  disabled={variants.length <= 2}
+                  onClick={() => setVariants((prev) => prev.filter((v) => v.key !== variant.key))}
+                  className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+                  title={variants.length <= 2 ? "Experiments need at least 2 variants" : "Remove"}
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-              <Input
-                value={variant.snapshotId}
-                onChange={(e) => patchVariant(variant.key, { snapshotId: e.target.value })}
-                placeholder="Snapshot ID"
-                className="flex-1 font-mono text-xs"
-                error={!variant.snapshotId.trim()}
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setPickerFor(variant.key)}
-                title="Browse snapshots"
-              >
-                <Search size={13} />
-                Browse
-              </Button>
-              <button
-                type="button"
-                disabled={variants.length <= 2}
-                onClick={() => setVariants((prev) => prev.filter((v) => v.key !== variant.key))}
-                className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
-                title={variants.length <= 2 ? "Experiments need at least 2 variants" : "Remove"}
-              >
-                <Trash2 size={14} />
-              </button>
+
+              {referenceTree && (
+                <div className="mt-3">
+                  <PatchTree
+                    tree={referenceTree}
+                    patches={variant.patches}
+                    onChange={(patches) => patchVariant(variant.key, { patches })}
+                  />
+                </div>
+              )}
             </div>
           ))}
         </div>
       </section>
-
-      <SnapshotPicker
-        projectId={projectId}
-        open={pickerFor !== null}
-        onClose={() => setPickerFor(null)}
-        onPick={(snapshotId) => {
-          if (pickerFor) patchVariant(pickerFor, { snapshotId });
-        }}
-      />
     </form>
   );
 }

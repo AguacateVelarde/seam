@@ -2,12 +2,16 @@ import { ChevronDown, Eye, History, Save, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
+import { Dialog } from "../../components/ui/Dialog";
 import { Dropdown } from "../../components/ui/Dropdown";
+import { Field } from "../../components/ui/Input";
+import { Select } from "../../components/ui/Select";
 import { formatDateTime } from "../../lib/format";
 import {
   useComponents,
   useCreatePublication,
   useCreateSnapshot,
+  useExperiments,
   useScreens,
   useSnapshots,
   useUpdateScreen,
@@ -26,6 +30,7 @@ export function ScreenEditor() {
   const screen = screensQuery.data?.find((s) => s.id === screenId);
   const componentsQuery = useComponents(projectId);
   const snapshotsQuery = useSnapshots(projectId, screenId);
+  const experimentsQuery = useExperiments(projectId);
 
   const createSnapshot = useCreateSnapshot(projectId, screenId);
   const createPublication = useCreatePublication(projectId, screenId);
@@ -43,6 +48,8 @@ export function ScreenEditor() {
 
   const [currentSnapshotId, setCurrentSnapshotId] = useState<string | null>(null);
   const [viewingSnapshot, setViewingSnapshot] = useState<Snapshot | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishExperimentId, setPublishExperimentId] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const loadedScreenRef = useRef<string | null>(null);
 
@@ -109,6 +116,11 @@ export function ScreenEditor() {
     }
   }
 
+  function openPublishDialog() {
+    setPublishExperimentId("");
+    setPublishOpen(true);
+  }
+
   async function handlePublish() {
     try {
       let snapshotId = currentSnapshotId;
@@ -119,10 +131,14 @@ export function ScreenEditor() {
         snapshotId = snapshot.id;
         version = snapshot.version;
       }
-      await createPublication.mutateAsync({ snapshotId });
+      await createPublication.mutateAsync({
+        snapshotId,
+        ...(publishExperimentId ? { experimentId: publishExperimentId } : {}),
+      });
+      setPublishOpen(false);
       toast.success(`Published v${version}`);
     } catch {
-      // handled globally
+      // handled globally (incl. EXPERIMENT_CONFLICT problems)
     }
   }
 
@@ -153,6 +169,18 @@ export function ScreenEditor() {
 
   const snapshots = snapshotsQuery.data ?? [];
   const busy = createSnapshot.isPending || createPublication.isPending;
+
+  // Active experiments that target this screen (or have no target) can be
+  // attached to the publication.
+  const eligibleExperiments = (experimentsQuery.data ?? []).filter(
+    (experiment) =>
+      experiment.status === "active" &&
+      (experiment.screenId == null || experiment.screenId === screenId),
+  );
+
+  const latestVersion = snapshots[0]?.version ?? 0;
+  const publishVersion =
+    isDirty || !currentSnapshotId ? latestVersion + 1 : (currentSnapshotVersion ?? latestVersion);
 
   return (
     <div className="flex h-full flex-col">
@@ -206,11 +234,11 @@ export function ScreenEditor() {
         </Button>
         <Button
           size="sm"
-          onClick={handlePublish}
+          onClick={openPublishDialog}
           disabled={(!tree && !currentSnapshotId) || readOnly || busy}
         >
           <Upload size={13} />
-          {createPublication.isPending ? "Publishing…" : "Publish"}
+          Publish
         </Button>
         <Link to={`/${projectId}/screens/${screenId}/preview`}>
           <Button variant="ghost" size="sm">
@@ -247,6 +275,47 @@ export function ScreenEditor() {
         </div>
         <PropsPanel projectId={projectId} readOnly={readOnly} />
       </div>
+
+      {/* Publish dialog */}
+      <Dialog open={publishOpen} onOpenChange={setPublishOpen} title={`Publish v${publishVersion}`}>
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            {isDirty || !currentSnapshotId
+              ? "Your draft will be saved as a new snapshot and published."
+              : `Snapshot v${publishVersion} will become the active publication.`}
+          </p>
+          <Field
+            label="Experiment"
+            hint={
+              eligibleExperiments.length === 0
+                ? "No active experiments target this screen."
+                : "Optionally attach an active experiment to this publication."
+            }
+          >
+            <Select
+              value={publishExperimentId}
+              onChange={(e) => setPublishExperimentId(e.target.value)}
+              disabled={eligibleExperiments.length === 0}
+            >
+              <option value="">None</option>
+              {eligibleExperiments.map((experiment) => (
+                <option key={experiment.id} value={experiment.id}>
+                  {experiment.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setPublishOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={handlePublish} disabled={busy}>
+              <Upload size={13} />
+              {busy ? "Publishing…" : "Publish"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }
