@@ -1,9 +1,58 @@
+import { useDraggable } from "@dnd-kit/core";
 import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cx } from "../../lib/cx";
 import type { Component } from "../../lib/types";
+import type { CanvasDragData } from "./canvasDnd";
 
 export const CATALOG_SEARCH_INPUT_ID = "catalog-search-input";
+
+function CatalogRow({
+  component,
+  onAdd,
+  disabled,
+}: {
+  component: Component;
+  onAdd: (component: Component) => void;
+  disabled?: boolean;
+}) {
+  const { attributes, listeners, setNodeRef } = useDraggable({
+    id: `catalog:${component.id}`,
+    data: { kind: "catalog", componentName: component.name } satisfies CanvasDragData,
+    disabled,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={cx(
+        "group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50",
+        !disabled && "cursor-grab active:cursor-grabbing",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-slate-800">{component.name}</p>
+        {component.description && (
+          <p className="truncate text-xs text-slate-400">{component.description}</p>
+        )}
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onAdd(component)}
+        title={`Add ${component.name}`}
+        className={cx(
+          "rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-700",
+          "group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30",
+        )}
+      >
+        <Plus size={15} />
+      </button>
+    </div>
+  );
+}
 
 export function CatalogPanel({
   components,
@@ -61,29 +110,12 @@ export function CatalogPanel({
                 {letter}
               </p>
               {group.map((component) => (
-                <div
+                <CatalogRow
                   key={component.id}
-                  className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-800">{component.name}</p>
-                    {component.description && (
-                      <p className="truncate text-xs text-slate-400">{component.description}</p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => onAdd(component)}
-                    title={`Add ${component.name}`}
-                    className={cx(
-                      "rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-700",
-                      "group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30",
-                    )}
-                  >
-                    <Plus size={15} />
-                  </button>
-                </div>
+                  component={component}
+                  onAdd={onAdd}
+                  disabled={disabled}
+                />
               ))}
             </div>
           ))

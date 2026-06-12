@@ -62,7 +62,7 @@ export type EditorStore = {
   setTree: (tree: Node) => void;
   selectNode: (id: string) => void;
   updateNodeProps: (id: string, props: Record<string, PropValue>) => void;
-  addNode: (parentId: string | null, slot: string, component: string) => void;
+  addNode: (parentId: string | null, slot: string, component: string, index?: number) => void;
   removeNode: (id: string) => void;
   moveNode: (id: string, newParentId: string, slot: string, index: number) => void;
   addCondition: (nodeId: string, condition: ConditionRule) => void;
@@ -96,7 +96,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set({ tree: next, isDirty: true });
   },
 
-  addNode: (parentId, slot, component) => {
+  addNode: (parentId, slot, component, index) => {
     const { tree } = get();
     const newNode: Node = { id: ulid(), component, props: {} };
     if (!tree) {
@@ -108,7 +108,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!parent) return;
     parent.slots = parent.slots ?? {};
     parent.slots[slot] = parent.slots[slot] ?? [];
-    parent.slots[slot].push(newNode);
+    const target = parent.slots[slot];
+    const insertAt =
+      index === undefined ? target.length : Math.max(0, Math.min(index, target.length));
+    target.splice(insertAt, 0, newNode);
     set({ tree: next, selectedNodeId: newNode.id, isDirty: true });
   },
 

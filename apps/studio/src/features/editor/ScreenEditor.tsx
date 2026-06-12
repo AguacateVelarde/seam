@@ -1,11 +1,15 @@
+import type { DragEndEvent, DragMoveEvent, DragStartEvent } from "@dnd-kit/core";
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { ChevronDown, Eye, History, Save, Upload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { Dialog } from "../../components/ui/Dialog";
 import { Dropdown } from "../../components/ui/Dropdown";
 import { Field } from "../../components/ui/Input";
+import { Segmented } from "../../components/ui/Segmented";
 import { Select } from "../../components/ui/Select";
+import { cx } from "../../lib/cx";
 import { formatDateTime } from "../../lib/format";
 import {
   useComponents,
@@ -17,11 +21,56 @@ import {
   useUpdateScreen,
 } from "../../lib/hooks";
 import type { Component, Snapshot } from "../../lib/types";
-import { findNodeById, useEditorStore } from "../../store/editor";
+import { findNodeById, findNodeLocation, useEditorStore } from "../../store/editor";
 import { toast } from "../../store/toast";
+import { CanvasView } from "./CanvasView";
 import { CatalogPanel } from "./CatalogPanel";
 import { PropsPanel } from "./PropsPanel";
 import { TreeOutline } from "./TreeOutline";
+import type {
+  CanvasDndState,
+  CanvasDragData,
+  CanvasDropData,
+  DropIndicator,
+  DropTarget,
+} from "./canvasDnd";
+import {
+  CanvasDndContext,
+  EMPTY_NODE_SET,
+  canvasCollisionDetection,
+  collectNodeIds,
+} from "./canvasDnd";
+
+const VIEW_STORAGE_KEY = "seam-studio.editor.view";
+
+type EditorView = "canvas" | "tree";
+
+function loadView(): EditorView {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === "tree" ? "tree" : "canvas";
+  } catch {
+    return "canvas";
+  }
+}
+
+/** Pointer Y at this point of the drag (activator position + accumulated delta). */
+function getPointerY(event: DragMoveEvent): number | null {
+  const activator = event.activatorEvent as Partial<PointerEvent> | null;
+  if (!activator || typeof activator.clientY !== "number") return null;
+  return activator.clientY + event.delta.y;
+}
+
+/** Counts the rendered children whose vertical midpoint is above the pointer. */
+function computeInsertionIndex(slotId: string, pointerY: number | null): number {
+  const container = document.querySelector(`[data-slot-children="${CSS.escape(slotId)}"]`);
+  if (!container || pointerY === null) return 0;
+  let index = 0;
+  for (const el of Array.from(container.querySelectorAll(":scope > [data-canvas-node]"))) {
+    const rect = el.getBoundingClientRect();
+    if (pointerY > rect.top + rect.height / 2) index += 1;
+  }
+  return index;
+}
 
 export function ScreenEditor() {
   const { projectId = "", screenId = "" } = useParams();
@@ -46,12 +95,32 @@ export function ScreenEditor() {
   const markSaved = useEditorStore((s) => s.markSaved);
   const resetEditor = useEditorStore((s) => s.resetEditor);
 
+  const moveNode = useEditorStore((s) => s.moveNode);
+
   const [currentSnapshotId, setCurrentSnapshotId] = useState<string | null>(null);
   const [viewingSnapshot, setViewingSnapshot] = useState<Snapshot | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishExperimentId, setPublishExperimentId] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const loadedScreenRef = useRef<string | null>(null);
+
+  // Canvas / Tree view toggle (persisted)
+  const [view, setView] = useState<EditorView>(loadView);
+  function changeView(next: EditorView) {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // localStorage unavailable — keep the in-memory value
+    }
+  }
+
+  // Drag & drop state (catalog rows + canvas boxes → slot regions)
+  const [activeDrag, setActiveDrag] = useState<CanvasDragData | null>(null);
+  const [indicator, setIndicator] = useState<DropIndicator | null>(null);
+  const [forbidden, setForbidden] = useState<ReadonlySet<string>>(EMPTY_NODE_SET);
+  const dropTargetRef = useRef<DropTarget | null>(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   // Load the latest snapshot into the store when the screen changes
   useEffect(() => {
@@ -95,6 +164,105 @@ export function ScreenEditor() {
       "children";
     addNode(parentId, slotName, component.name);
   }
+
+  /* ------------------------------ Drag & drop ------------------------------ */
+
+  function clearDropState() {
+    dropTargetRef.current = null;
+    setIndicator(null);
+  }
+
+  function handleDragStart(event: DragStartEvent) {
+    const data = event.active.data.current as CanvasDragData | undefined;
+    if (!data) return;
+    setActiveDrag(data);
+    if (data.kind === "node" && tree) {
+      const dragged = findNodeById(tree, data.nodeId);
+      setForbidden(dragged ? collectNodeIds(dragged) : new Set([data.nodeId]));
+    } else {
+      setForbidden(EMPTY_NODE_SET);
+    }
+  }
+
+  function handleDragMove(event: DragMoveEvent) {
+    const data = event.active.data.current as CanvasDragData | undefined;
+    const overData = event.over?.data.current as CanvasDropData | undefined;
+    if (!data || !event.over || !overData || readOnly) {
+      clearDropState();
+      return;
+    }
+    if (overData.kind === "root") {
+      // Empty-tree drop zone: only catalog items can become the root.
+      dropTargetRef.current =
+        data.kind === "catalog" && !tree ? { parentId: null, slot: "children", index: 0 } : null;
+      setIndicator(null);
+      return;
+    }
+    if (data.kind === "node" && forbidden.has(overData.parentId)) {
+      clearDropState();
+      return;
+    }
+    const slotId = String(event.over.id);
+    const index = computeInsertionIndex(slotId, getPointerY(event));
+    dropTargetRef.current = { parentId: overData.parentId, slot: overData.slot, index };
+    setIndicator((prev) =>
+      prev && prev.slotId === slotId && prev.index === index ? prev : { slotId, index },
+    );
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const data = event.active.data.current as CanvasDragData | undefined;
+    const target = dropTargetRef.current;
+    setActiveDrag(null);
+    setForbidden(EMPTY_NODE_SET);
+    clearDropState();
+    if (!data || !target || readOnly) return;
+
+    if (data.kind === "catalog") {
+      if (target.parentId === null) {
+        if (!tree) addNode(null, "children", data.componentName);
+      } else {
+        addNode(target.parentId, target.slot, data.componentName, target.index);
+      }
+      return;
+    }
+
+    // Moving an existing node
+    if (!tree || tree.id === data.nodeId || target.parentId === null) return;
+    if (forbidden.has(target.parentId)) return;
+    const location = findNodeLocation(tree, data.nodeId);
+    if (!location) return;
+    let index = target.index;
+    if (location.parent.id === target.parentId && location.slot === target.slot) {
+      // Same-slot reorder: the visual index counts the dragged node itself,
+      // but moveNode removes it before re-inserting.
+      if (location.index < index) index -= 1;
+      if (index === location.index) return; // dropped back in place — no-op
+    }
+    moveNode(data.nodeId, target.parentId, target.slot, index);
+  }
+
+  function handleDragCancel() {
+    setActiveDrag(null);
+    setForbidden(EMPTY_NODE_SET);
+    clearDropState();
+  }
+
+  const canvasDndState = useMemo<CanvasDndState>(
+    () => ({
+      indicator,
+      forbidden,
+      activeNodeId: activeDrag?.kind === "node" ? activeDrag.nodeId : null,
+      isDragging: activeDrag !== null,
+    }),
+    [indicator, forbidden, activeDrag],
+  );
+
+  const dragOverlayLabel = activeDrag
+    ? activeDrag.kind === "catalog"
+      ? activeDrag.componentName
+      : ((tree && findNodeById(tree, activeDrag.nodeId)?.component) ?? "Node")
+    : null;
 
   async function saveDraft(): Promise<Snapshot | null> {
     if (!tree) {
@@ -200,6 +368,15 @@ export function ScreenEditor() {
         {screen && <span className="font-mono text-xs text-slate-400">/{screen.path}</span>}
         <div className="flex-1" />
 
+        <Segmented
+          value={view}
+          onChange={changeView}
+          options={[
+            { value: "canvas", label: "Canvas" },
+            { value: "tree", label: "Tree" },
+          ]}
+        />
+
         <Dropdown
           align="end"
           trigger={
@@ -264,17 +441,43 @@ export function ScreenEditor() {
       )}
 
       {/* Three panels */}
-      <div className="flex min-h-0 flex-1">
-        <CatalogPanel components={components} onAdd={handleAddComponent} disabled={readOnly} />
-        <div className="min-w-0 flex-1 overflow-y-auto bg-slate-50">
-          {snapshotsQuery.isLoading ? (
-            <p className="p-8 text-sm text-slate-500">Loading…</p>
-          ) : (
-            <TreeOutline tree={activeTree} readOnly={readOnly} />
-          )}
-        </div>
-        <PropsPanel projectId={projectId} readOnly={readOnly} />
-      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={canvasCollisionDetection}
+        onDragStart={handleDragStart}
+        onDragMove={handleDragMove}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <CanvasDndContext.Provider value={canvasDndState}>
+          <div className={cx("flex min-h-0 flex-1", activeDrag && "select-none")}>
+            <CatalogPanel components={components} onAdd={handleAddComponent} disabled={readOnly} />
+            <div className="min-w-0 flex-1 overflow-hidden bg-slate-50">
+              {snapshotsQuery.isLoading ? (
+                <p className="p-8 text-sm text-slate-500">Loading…</p>
+              ) : view === "canvas" ? (
+                <CanvasView
+                  tree={activeTree}
+                  readOnly={readOnly}
+                  componentsByName={componentsByName}
+                />
+              ) : (
+                <div className="h-full overflow-y-auto">
+                  <TreeOutline tree={activeTree} readOnly={readOnly} />
+                </div>
+              )}
+            </div>
+            <PropsPanel projectId={projectId} readOnly={readOnly} />
+          </div>
+          <DragOverlay dropAnimation={null}>
+            {dragOverlayLabel ? (
+              <div className="pointer-events-none rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-lg">
+                {dragOverlayLabel}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </CanvasDndContext.Provider>
+      </DndContext>
 
       {/* Publish dialog */}
       <Dialog open={publishOpen} onOpenChange={setPublishOpen} title={`Publish v${publishVersion}`}>
